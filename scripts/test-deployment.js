@@ -344,7 +344,7 @@ function setupTests(tester) {
   });
 }
 
-// Main execution
+// Main execution hola
 async function main() {
   const baseUrl = process.argv[2] || process.env.DEPLOYMENT_URL || 'http://localhost:3000';
   
