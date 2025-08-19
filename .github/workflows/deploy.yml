@@ -23,7 +23,7 @@ jobs:
       postgres:
         image: postgres:15
         env:
-          POSTGRES_PASSWORD: password123
+          POSTGRES_PASSWORD: 12345
           POSTGRES_DB: todoapp_test
         options: >-
           --health-cmd pg_isready
@@ -49,7 +49,7 @@ jobs:
     - name: Create test environment file
       run: |
         echo "NODE_ENV=test" > .env.test
-        echo "DATABASE_URL=postgresql://postgres:password123@localhost:5432/todoapp_test" >> .env.test
+        echo "DATABASE_URL=postgresql://postgres:12345@localhost:5432/todoapp_test" >> .env.test
         echo "JWT_SECRET=test-jwt-secret" >> .env.test
         echo "ENABLE_NOTIFICATIONS=false" >> .env.test
     
@@ -62,9 +62,9 @@ jobs:
     
     - name: Initialize test database
       run: |
-        PGPASSWORD=password123 psql -h localhost -U postgres -d todoapp_test -f database/init.sql
+        PGPASSWORD=12345 psql -h localhost -U postgres -d todoapp_test -f database/init.sql
       env:
-        PGPASSWORD: password123
+        PGPASSWORD: 12345
     
     - name: Run linting
       run: npm run lint
@@ -73,19 +73,19 @@ jobs:
       run: npm test
       env:
         NODE_ENV: test
-        DATABASE_URL: postgresql://postgres:password123@localhost:5432/todoapp_test
+        DATABASE_URL: postgresql://postgres:12345@localhost:5432/todoapp_test
     
     - name: Run integration tests
       run: npm run test:integration
       env:
         NODE_ENV: test
-        DATABASE_URL: postgresql://postgres:password123@localhost:5432/todoapp_test
+        DATABASE_URL: postgresql://postgres:12345@localhost:5432/todoapp_test
     
     - name: Generate test coverage
       run: npm run test:coverage
       env:
         NODE_ENV: test
-        DATABASE_URL: postgresql://postgres:password123@localhost:5432/todoapp_test
+        DATABASE_URL: postgresql://postgres:12345@localhost:5432/todoapp_test
     
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v3
