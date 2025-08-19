@@ -12,9 +12,10 @@ services:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 30s
-      timeout: 10s
+      interval: 10s
+      timeout: 5s
       retries: 5
+      start_period: 30s
     restart: unless-stopped
 
   todo-api:
@@ -27,9 +28,10 @@ services:
       JWT_SECRET: mi-super-secreto-jwt-key
       ENABLE_NOTIFICATIONS: "false"
     ports:
-      - "3001:3000"  # Puerto 3001 para Docker, 3000 interno
+      - "3001:3000"
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy  # Espera hasta que PostgreSQL esté saludable
     restart: unless-stopped
 
 volumes:
