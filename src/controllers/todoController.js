@@ -1,30 +1,19 @@
+const { Pool } = require('pg');
 const Joi = require('joi');
 
-// Mock data for now (replace with database later)
-let todos = [
-  {
-    id: 1,
-    title: 'Welcome to Todo API',
-    description: 'This is your first todo item. You can edit or delete it.',
-    completed: false,
-    priority: 'medium',
-    due_date: null,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString()
-  },
-  {
-    id: 2,
-    title: 'Set up development environment',
-    description: 'Install Node.js, Docker, and other required tools.',
-    completed: false,
-    priority: 'high',
-    due_date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString()
-  }
-];
+// Database connection
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL || 'postgresql://postgres:12345@localhost:5432/todoapp'
+});
 
-let nextId = 3;
+// Test database connection
+pool.on('connect', () => {
+  console.log('📊 Connected to PostgreSQL database');
+});
+
+pool.on('error', (err) => {
+  console.error('❌ PostgreSQL connection error:', err);
+});
 
 // Validation schemas
 const createTodoSchema = Joi.object({
@@ -55,29 +44,53 @@ class TodoController {
       const { page = 1, limit = 10, status, priority } = req.query;
       const offset = (page - 1) * limit;
       
-      let filteredTodos = [...todos];
-      
-      // Apply filters
+      let whereClause = '';
+      let params = [];
+      let paramCount = 0;
+
       if (status === 'completed') {
-        filteredTodos = filteredTodos.filter(todo => todo.completed);
+        paramCount++;
+        whereClause += `WHERE completed = $${paramCount}`;
+        params.push(true);
       } else if (status === 'pending') {
-        filteredTodos = filteredTodos.filter(todo => !todo.completed);
+        paramCount++;
+        whereClause += `WHERE completed = $${paramCount}`;
+        params.push(false);
       }
-      
+
       if (priority) {
-        filteredTodos = filteredTodos.filter(todo => todo.priority === priority);
+        paramCount++;
+        whereClause += whereClause ? ` AND priority = $${paramCount}` : `WHERE priority = $${paramCount}`;
+        params.push(priority);
       }
+
+      params.push(limit, offset);
+      const limitOffset = `ORDER BY created_at DESC LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
+
+      const queryText = `
+        SELECT 
+          id, title, description, completed, priority, 
+          due_date, created_at, updated_at
+        FROM todos 
+        ${whereClause}
+        ${limitOffset}
+      `;
+
+      const result = await pool.query(queryText, params);
       
-      // Apply pagination
-      const paginatedTodos = filteredTodos.slice(offset, offset + parseInt(limit));
+      // Get total count
+      const countQuery = `SELECT COUNT(*) as count FROM todos ${whereClause}`;
+      const countParams = params.slice(0, paramCount);
+      const countResult = await pool.query(countQuery, countParams);
+      const total = parseInt(countResult.rows[0].count);
       
       res.json({
-        data: paginatedTodos,
+        data: result.rows,
         pagination: {
           page: parseInt(page),
           limit: parseInt(limit),
-          total: filteredTodos.length,
-          pages: Math.ceil(filteredTodos.length / limit)
+          total,
+          pages: Math.ceil(total / limit)
         }
       });
     } catch (error) {
@@ -93,16 +106,24 @@ class TodoController {
   static async getTodoById(req, res) {
     try {
       const { id } = req.params;
-      const todo = todos.find(t => t.id === parseInt(id));
+      const queryText = `
+        SELECT 
+          id, title, description, completed, priority, 
+          due_date, created_at, updated_at
+        FROM todos 
+        WHERE id = $1
+      `;
+
+      const result = await pool.query(queryText, [id]);
       
-      if (!todo) {
+      if (result.rows.length === 0) {
         return res.status(404).json({ 
           error: 'Todo not found',
           message: `Todo with ID ${id} does not exist`
         });
       }
       
-      res.json({ data: todo });
+      res.json({ data: result.rows[0] });
     } catch (error) {
       console.error('Error fetching todo:', error);
       res.status(500).json({ 
@@ -124,21 +145,20 @@ class TodoController {
         });
       }
       
-      const newTodo = {
-        id: nextId++,
-        title: value.title,
-        description: value.description || '',
-        completed: false,
-        priority: value.priority || 'medium',
-        due_date: value.dueDate || null,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      };
+      const { title, description, priority = 'medium', dueDate } = value;
       
-      todos.push(newTodo);
+      const queryText = `
+        INSERT INTO todos (title, description, priority, due_date)
+        VALUES ($1, $2, $3, $4)
+        RETURNING 
+          id, title, description, completed, priority, 
+          due_date, created_at, updated_at
+      `;
+
+      const result = await pool.query(queryText, [title, description, priority, dueDate]);
       
       res.status(201).json({ 
-        data: newTodo,
+        data: result.rows[0],
         message: 'Todo created successfully'
       });
     } catch (error) {
@@ -163,26 +183,71 @@ class TodoController {
         });
       }
       
-      const todoIndex = todos.findIndex(t => t.id === parseInt(id));
-      if (todoIndex === -1) {
+      // Build dynamic update query
+      const updates = [];
+      const params = [];
+      let paramCount = 0;
+
+      if (value.title !== undefined) {
+        paramCount++;
+        updates.push(`title = $${paramCount}`);
+        params.push(value.title);
+      }
+
+      if (value.description !== undefined) {
+        paramCount++;
+        updates.push(`description = $${paramCount}`);
+        params.push(value.description);
+      }
+
+      if (value.completed !== undefined) {
+        paramCount++;
+        updates.push(`completed = $${paramCount}`);
+        params.push(value.completed);
+      }
+
+      if (value.priority !== undefined) {
+        paramCount++;
+        updates.push(`priority = $${paramCount}`);
+        params.push(value.priority);
+      }
+
+      if (value.dueDate !== undefined) {
+        paramCount++;
+        updates.push(`due_date = $${paramCount}`);
+        params.push(value.dueDate);
+      }
+
+      if (updates.length === 0) {
+        return res.status(400).json({
+          error: 'No fields to update',
+          message: 'At least one field must be provided for update'
+        });
+      }
+
+      paramCount++;
+      params.push(id);
+
+      const queryText = `
+        UPDATE todos 
+        SET ${updates.join(', ')}
+        WHERE id = $${paramCount}
+        RETURNING 
+          id, title, description, completed, priority, 
+          due_date, created_at, updated_at
+      `;
+
+      const result = await pool.query(queryText, params);
+      
+      if (result.rows.length === 0) {
         return res.status(404).json({ 
           error: 'Todo not found',
           message: `Todo with ID ${id} does not exist`
         });
       }
       
-      // Update todo
-      const updatedTodo = {
-        ...todos[todoIndex],
-        ...value,
-        dueDate: value.dueDate !== undefined ? value.dueDate : todos[todoIndex].due_date,
-        updated_at: new Date().toISOString()
-      };
-      
-      todos[todoIndex] = updatedTodo;
-      
       res.json({ 
-        data: updatedTodo,
+        data: result.rows[0],
         message: 'Todo updated successfully'
       });
     } catch (error) {
@@ -199,15 +264,15 @@ class TodoController {
     try {
       const { id } = req.params;
       
-      const todoIndex = todos.findIndex(t => t.id === parseInt(id));
-      if (todoIndex === -1) {
+      const queryText = 'DELETE FROM todos WHERE id = $1 RETURNING id';
+      const result = await pool.query(queryText, [id]);
+      
+      if (result.rows.length === 0) {
         return res.status(404).json({ 
           error: 'Todo not found',
           message: `Todo with ID ${id} does not exist`
         });
       }
-      
-      todos.splice(todoIndex, 1);
       
       res.json({ 
         message: 'Todo deleted successfully',
@@ -225,27 +290,34 @@ class TodoController {
   // Get statistics
   static async getStats(req, res) {
     try {
-      const total = todos.length;
-      const completed = todos.filter(t => t.completed).length;
-      const pending = total - completed;
-      const byPriority = {
-        high: todos.filter(t => t.priority === 'high').length,
-        medium: todos.filter(t => t.priority === 'medium').length,
-        low: todos.filter(t => t.priority === 'low').length
-      };
-      const overdue = todos.filter(t => 
-        t.due_date && new Date(t.due_date) < new Date() && !t.completed
-      ).length;
+      const queryText = `
+        SELECT 
+          COUNT(*) as total,
+          COUNT(*) FILTER (WHERE completed = true) as completed,
+          COUNT(*) FILTER (WHERE completed = false) as pending,
+          COUNT(*) FILTER (WHERE priority = 'high') as high_priority,
+          COUNT(*) FILTER (WHERE priority = 'medium') as medium_priority,
+          COUNT(*) FILTER (WHERE priority = 'low') as low_priority,
+          COUNT(*) FILTER (WHERE due_date < NOW() AND completed = false) as overdue
+        FROM todos
+      `;
 
-      const stats = {
-        total,
-        completed,
-        pending,
-        by_priority: byPriority,
-        overdue
-      };
+      const result = await pool.query(queryText);
+      const stats = result.rows[0];
       
-      res.json({ data: stats });
+      res.json({
+        data: {
+          total: parseInt(stats.total),
+          completed: parseInt(stats.completed),
+          pending: parseInt(stats.pending),
+          by_priority: {
+            high: parseInt(stats.high_priority),
+            medium: parseInt(stats.medium_priority),
+            low: parseInt(stats.low_priority)
+          },
+          overdue: parseInt(stats.overdue)
+        }
+      });
     } catch (error) {
       console.error('Error fetching stats:', error);
       res.status(500).json({ 
@@ -268,19 +340,28 @@ class TodoController {
       }
       
       const { q, page, limit } = value;
+      const offset = (page - 1) * limit;
       
-      const searchResults = todos.filter(todo =>
-        todo.title.toLowerCase().includes(q.toLowerCase()) ||
-        (todo.description && todo.description.toLowerCase().includes(q.toLowerCase()))
-      );
+      const queryText = `
+        SELECT 
+          id, title, description, completed, priority, 
+          due_date, created_at, updated_at
+        FROM todos 
+        WHERE 
+          title ILIKE $1 OR description ILIKE $1
+        ORDER BY created_at DESC 
+        LIMIT $2 OFFSET $3
+      `;
+
+      const result = await pool.query(queryText, [`%${q}%`, limit, offset]);
       
       res.json({
-        data: searchResults,
+        data: result.rows,
         search: {
           query: q,
           page,
           limit,
-          results: searchResults.length
+          results: result.rows.length
         }
       });
     } catch (error) {
@@ -297,19 +378,26 @@ class TodoController {
     try {
       const { id } = req.params;
       
-      const todoIndex = todos.findIndex(t => t.id === parseInt(id));
-      if (todoIndex === -1) {
+      const queryText = `
+        UPDATE todos 
+        SET completed = true
+        WHERE id = $1
+        RETURNING 
+          id, title, description, completed, priority, 
+          due_date, created_at, updated_at
+      `;
+
+      const result = await pool.query(queryText, [id]);
+      
+      if (result.rows.length === 0) {
         return res.status(404).json({ 
           error: 'Todo not found',
           message: `Todo with ID ${id} does not exist`
         });
       }
       
-      todos[todoIndex].completed = true;
-      todos[todoIndex].updated_at = new Date().toISOString();
-      
       res.json({ 
-        data: todos[todoIndex],
+        data: result.rows[0],
         message: 'Todo marked as completed'
       });
     } catch (error) {
@@ -326,19 +414,26 @@ class TodoController {
     try {
       const { id } = req.params;
       
-      const todoIndex = todos.findIndex(t => t.id === parseInt(id));
-      if (todoIndex === -1) {
+      const queryText = `
+        UPDATE todos 
+        SET completed = false
+        WHERE id = $1
+        RETURNING 
+          id, title, description, completed, priority, 
+          due_date, created_at, updated_at
+      `;
+
+      const result = await pool.query(queryText, [id]);
+      
+      if (result.rows.length === 0) {
         return res.status(404).json({ 
           error: 'Todo not found',
           message: `Todo with ID ${id} does not exist`
         });
       }
       
-      todos[todoIndex].completed = false;
-      todos[todoIndex].updated_at = new Date().toISOString();
-      
       res.json({ 
-        data: todos[todoIndex],
+        data: result.rows[0],
         message: 'Todo marked as not completed'
       });
     } catch (error) {
