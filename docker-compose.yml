@@ -31,7 +31,7 @@ services:
       - "3001:3000"
     depends_on:
       postgres:
-        condition: service_healthy  # Espera hasta que PostgreSQL esté saludable
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
