@@ -1,0 +1,300 @@
+name: Deploy to Google Cloud Run
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  SERVICE_NAME: todo-api-nodejs
+  REGION: us-central1
+  REPOSITORY: todo-api-repo
+  IMAGE_NAME: todo-api-nodejs
+  REGISTRY_URL: us-central1-docker.pkg.dev
+
+jobs:
+  test:
+    name: Test Application
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: password123
+          POSTGRES_DB: todoapp_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Create test environment file
+      run: |
+        echo "NODE_ENV=test" > .env.test
+        echo "DATABASE_URL=postgresql://postgres:password123@localhost:5432/todoapp_test" >> .env.test
+        echo "JWT_SECRET=test-jwt-secret" >> .env.test
+        echo "ENABLE_NOTIFICATIONS=false" >> .env.test
+    
+    - name: Wait for PostgreSQL
+      run: |
+        until pg_isready -h localhost -p 5432 -U postgres; do
+          echo "Waiting for PostgreSQL..."
+          sleep 2
+        done
+    
+    - name: Initialize test database
+      run: |
+        PGPASSWORD=password123 psql -h localhost -U postgres -d todoapp_test -f database/init.sql
+      env:
+        PGPASSWORD: password123
+    
+    - name: Run linting
+      run: npm run lint
+    
+    - name: Run unit tests
+      run: npm test
+      env:
+        NODE_ENV: test
+        DATABASE_URL: postgresql://postgres:password123@localhost:5432/todoapp_test
+    
+    - name: Run integration tests
+      run: npm run test:integration
+      env:
+        NODE_ENV: test
+        DATABASE_URL: postgresql://postgres:password123@localhost:5432/todoapp_test
+    
+    - name: Generate test coverage
+      run: npm run test:coverage
+      env:
+        NODE_ENV: test
+        DATABASE_URL: postgresql://postgres:password123@localhost:5432/todoapp_test
+    
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage/lcov.info
+        flags: unittests
+        name: codecov-umbrella
+
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Run security audit
+      run: npm audit --audit-level moderate
+    
+    - name: Run Snyk to check for vulnerabilities
+      uses: snyk/actions/node@master
+      env:
+        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      with:
+        args: --severity-threshold=high
+      continue-on-error: true
+
+  build-and-deploy:
+    name: Build and Deploy to Cloud Run
+    runs-on: ubuntu-latest
+    needs: [test, security]
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+    
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v1
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+        project_id: ${{ secrets.GCP_PROJECT_ID }}
+    
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v1
+    
+    - name: Verify GCP Authentication
+      run: |
+        echo "Verificando autenticación..."
+        gcloud auth list --filter=status:ACTIVE --format="value(account)"
+        gcloud config get-value project
+    
+    - name: Configure Docker for Artifact Registry
+      run: |
+        echo "Configurando Docker para Artifact Registry..."
+        gcloud auth configure-docker $REGISTRY_URL --quiet
+    
+    - name: Create production environment file
+      run: |
+        echo "NODE_ENV=production" > .env.production
+        echo "PORT=8080" >> .env.production
+        echo "DATABASE_URL=${{ secrets.DATABASE_URL }}" >> .env.production
+        echo "JWT_SECRET=${{ secrets.JWT_SECRET }}" >> .env.production
+        echo "EMAIL_HOST=${{ secrets.EMAIL_HOST }}" >> .env.production
+        echo "EMAIL_PORT=${{ secrets.EMAIL_PORT }}" >> .env.production
+        echo "EMAIL_USER=${{ secrets.EMAIL_USER }}" >> .env.production
+        echo "EMAIL_PASS=${{ secrets.EMAIL_PASS }}" >> .env.production
+        echo "EMAIL_FROM=${{ secrets.EMAIL_FROM }}" >> .env.production
+        echo "ENABLE_NOTIFICATIONS=true" >> .env.production
+    
+    - name: Build Docker image
+      run: |
+        docker build . --platform linux/amd64 \
+          -t $REGISTRY_URL/$PROJECT_ID/$REPOSITORY/$IMAGE_NAME:$GITHUB_SHA \
+          -t $REGISTRY_URL/$PROJECT_ID/$REPOSITORY/$IMAGE_NAME:latest \
+          --build-arg NODE_ENV=production
+    
+    - name: Test Docker image locally
+      run: |
+        # Start container for testing
+        docker run -d --name test-container \
+          -p 3000:8080 \
+          -e NODE_ENV=production \
+          -e DATABASE_URL=sqlite::memory: \
+          -e JWT_SECRET=test-secret \
+          $REGISTRY_URL/$PROJECT_ID/$REPOSITORY/$IMAGE_NAME:latest
+        
+        # Wait for container to start
+        sleep 15
+        
+        # Test health endpoint
+        for i in {1..5}; do
+          if curl -f http://localhost:3000/health; then
+            echo "Health check passed"
+            break
+          fi
+          echo "Health check attempt $i failed, retrying..."
+          sleep 5
+        done
+        
+        # Cleanup
+        docker stop test-container
+        docker rm test-container
+    
+    - name: Push Docker image to Artifact Registry
+      run: |
+        echo "Pushing image to: $REGISTRY_URL/$PROJECT_ID/$REPOSITORY/$IMAGE_NAME"
+        docker push $REGISTRY_URL/$PROJECT_ID/$REPOSITORY/$IMAGE_NAME:$GITHUB_SHA
+        docker push $REGISTRY_URL/$PROJECT_ID/$REPOSITORY/$IMAGE_NAME:latest
+    
+    - name: Deploy to Cloud Run
+      run: |
+        gcloud run deploy $SERVICE_NAME \
+          --image $REGISTRY_URL/$PROJECT_ID/$REPOSITORY/$IMAGE_NAME:$GITHUB_SHA \
+          --platform managed \
+          --region $REGION \
+          --allow-unauthenticated \
+          --port 8080 \
+          --memory 1Gi \
+          --cpu 1 \
+          --min-instances 0 \
+          --max-instances 10 \
+          --timeout 300 \
+          --concurrency 80 \
+          --set-env-vars="NODE_ENV=production,JWT_SECRET=${{ secrets.JWT_SECRET }},ENABLE_NOTIFICATIONS=true" \
+          --set-secrets="DATABASE_URL=${{ secrets.DATABASE_URL_SECRET }}:latest,EMAIL_PASS=${{ secrets.EMAIL_PASS_SECRET }}:latest"
+    
+    - name: Get service URL
+      id: get-url
+      run: |
+        SERVICE_URL=$(gcloud run services describe $SERVICE_NAME --region=$REGION --format='value(status.url)')
+        echo "Service deployed at: $SERVICE_URL"
+        echo "SERVICE_URL=$SERVICE_URL" >> $GITHUB_ENV
+        echo "service_url=$SERVICE_URL" >> $GITHUB_OUTPUT
+    
+    - name: Wait for deployment to be ready
+      run: |
+        echo "Waiting for deployment to be ready..."
+        for i in {1..12}; do
+          if curl -f --max-time 10 $SERVICE_URL/health; then
+            echo "✅ Deployment is ready!"
+            break
+          fi
+          echo "Attempt $i: Service not ready yet, waiting..."
+          sleep 10
+        done
+    
+    - name: Run deployment tests
+      run: |
+        echo "Running deployment tests..."
+        npm install -g node
+        node scripts/test-deployment.js $SERVICE_URL
+      env:
+        DEPLOYMENT_URL: ${{ env.SERVICE_URL }}
+    
+    - name: Performance test
+      run: |
+        echo "Running basic performance test..."
+        for i in {1..5}; do
+          start_time=$(date +%s%3N)
+          curl -f $SERVICE_URL/health > /dev/null
+          end_time=$(date +%s%3N)
+          duration=$((end_time - start_time))
+          echo "Request $i: ${duration}ms"
+        done
+    
+    - name: Update deployment status
+      if: always()
+      run: |
+        if [ "${{ job.status }}" == "success" ]; then
+          echo "✅ Deployment successful!"
+          echo "🔗 Service URL: $SERVICE_URL"
+          echo "📊 Health Check: $SERVICE_URL/health"
+          echo "📚 API Docs: $SERVICE_URL/api/v1"
+        else
+          echo "❌ Deployment failed!"
+          exit 1
+        fi
+
+  notify:
+    name: Notify Deployment Status
+    runs-on: ubuntu-latest
+    needs: [build-and-deploy]
+    if: always() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    
+    steps:
+    - name: Notify success
+      if: needs.build-and-deploy.result == 'success'
+      run: |
+        echo "🎉 Deployment successful!"
+        echo "The Todo API has been deployed to Google Cloud Run"
+    
+    - name: Notify failure
+      if: needs.build-and-deploy.result == 'failure'
+      run: |
+        echo "💥 Deployment failed!"
+        echo "Please check the logs and try again"
+        exit 1
