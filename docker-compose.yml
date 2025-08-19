@@ -1,7 +1,4 @@
-version: '3.8'
-
 services:
-  # PostgreSQL Database
   postgres:
     image: postgres:15-alpine
     container_name: todo-postgres
@@ -13,69 +10,27 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 30s
       timeout: 10s
       retries: 5
-    networks:
-      - todo-network
     restart: unless-stopped
 
-  # Todo API Application
   todo-api:
-    build: 
-      context: .
-      dockerfile: Dockerfile
+    build: .
     container_name: todo-api
     environment:
-      NODE_ENV: development
+      NODE_ENV: production
       PORT: 3000
       DATABASE_URL: postgresql://postgres:12345@postgres:5432/todoapp
-      JWT_SECRET: mi-super-secreto-jwt-key-para-desarrollo
-      EMAIL_HOST: smtp.gmail.com
-      EMAIL_PORT: 587
-      EMAIL_USER: tu-email@gmail.com
-      EMAIL_PASS: tu-app-password
+      JWT_SECRET: mi-super-secreto-jwt-key
       ENABLE_NOTIFICATIONS: "false"
     ports:
-      - "3000:3000"
+      - "3001:3000"  # Puerto 3001 para Docker, 3000 interno
     depends_on:
-      postgres:
-        condition: service_healthy
-    volumes:
-      - ./src:/app/src:ro
-    networks:
-      - todo-network
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
-  # Redis for caching (optional)
-  redis:
-    image: redis:7-alpine
-    container_name: todo-redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    networks:
-      - todo-network
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      - postgres
     restart: unless-stopped
 
 volumes:
   postgres_data:
-  redis_data:
-
-networks:
-  todo-network:
-    driver: bridge

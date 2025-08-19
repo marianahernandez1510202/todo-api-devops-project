@@ -1,15 +1,10 @@
 const { Pool } = require('pg');
 require('dotenv').config();
 
-// Database configuration
+// Database configuration with SSL disabled for Docker
 const config = {
   connectionString: process.env.DATABASE_URL,
-  host: process.env.DB_HOST || 'localhost',
-  port: process.env.DB_PORT || 5432,
-  database: process.env.DB_NAME || 'todoapp',
-  user: process.env.DB_USER || 'postgres',
-  password: process.env.DB_PASSWORD || 'password123',
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+  ssl: false, // Deshabilitar SSL para Docker local
   max: 20, // Maximum number of clients in the pool
   idleTimeoutMillis: 30000, // Close idle clients after 30 seconds
   connectionTimeoutMillis: 2000, // Return error after 2 seconds if connection could not be established
@@ -22,16 +17,16 @@ const pool = new Pool(config);
 async function connectDatabase() {
   try {
     const client = await pool.connect();
-    console.log('Database connected successfully');
+    console.log('✅ Database connected successfully');
     
     // Test query
     const result = await client.query('SELECT NOW()');
-    console.log('Database time:', result.rows[0].now);
+    console.log('📅 Database time:', result.rows[0].now);
     
     client.release();
     return true;
   } catch (error) {
-    console.error('Database connection error:', error);
+    console.error('❌ Database connection error:', error.message);
     throw error;
   }
 }
@@ -42,10 +37,10 @@ async function query(text, params) {
   try {
     const result = await pool.query(text, params);
     const duration = Date.now() - start;
-    console.log('Executed query', { text, duration, rows: result.rowCount });
+    console.log('🔍 Executed query', { duration, rows: result.rowCount });
     return result;
   } catch (error) {
-    console.error('Database query error:', error);
+    console.error('❌ Database query error:', error.message);
     throw error;
   }
 }
@@ -73,7 +68,7 @@ async function initializeDatabase() {
     CREATE INDEX IF NOT EXISTS idx_todos_priority ON todos(priority);
     CREATE INDEX IF NOT EXISTS idx_todos_created_at ON todos(created_at);
 
-    -- Create updated_at trigger
+    -- Create updated_at trigger function
     CREATE OR REPLACE FUNCTION update_updated_at_column()
     RETURNS TRIGGER AS $$
     BEGIN
@@ -91,9 +86,9 @@ async function initializeDatabase() {
 
   try {
     await query(createTableQuery);
-    console.log('Database tables initialized successfully');
+    console.log('✅ Database tables initialized successfully');
   } catch (error) {
-    console.error('Error initializing database tables:', error);
+    console.error('❌ Error initializing database tables:', error.message);
     throw error;
   }
 }
@@ -102,9 +97,9 @@ async function initializeDatabase() {
 async function closeDatabase() {
   try {
     await pool.end();
-    console.log('Database connection pool closed');
+    console.log('✅ Database connection pool closed');
   } catch (error) {
-    console.error('Error closing database:', error);
+    console.error('❌ Error closing database:', error.message);
   }
 }
 

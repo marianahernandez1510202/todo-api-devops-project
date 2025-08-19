@@ -1,19 +1,5 @@
-const { Pool } = require('pg');
+const { query } = require('../config/database');
 const Joi = require('joi');
-
-// Database connection
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL || 'postgresql://postgres:12345@localhost:5432/todoapp'
-});
-
-// Test database connection
-pool.on('connect', () => {
-  console.log('📊 Connected to PostgreSQL database');
-});
-
-pool.on('error', (err) => {
-  console.error('❌ PostgreSQL connection error:', err);
-});
 
 // Validation schemas
 const createTodoSchema = Joi.object({
@@ -76,12 +62,12 @@ class TodoController {
         ${limitOffset}
       `;
 
-      const result = await pool.query(queryText, params);
+      const result = await query(queryText, params);
       
       // Get total count
       const countQuery = `SELECT COUNT(*) as count FROM todos ${whereClause}`;
       const countParams = params.slice(0, paramCount);
-      const countResult = await pool.query(countQuery, countParams);
+      const countResult = await query(countQuery, countParams);
       const total = parseInt(countResult.rows[0].count);
       
       res.json({
@@ -114,7 +100,7 @@ class TodoController {
         WHERE id = $1
       `;
 
-      const result = await pool.query(queryText, [id]);
+      const result = await query(queryText, [id]);
       
       if (result.rows.length === 0) {
         return res.status(404).json({ 
@@ -155,7 +141,7 @@ class TodoController {
           due_date, created_at, updated_at
       `;
 
-      const result = await pool.query(queryText, [title, description, priority, dueDate]);
+      const result = await query(queryText, [title, description, priority, dueDate]);
       
       res.status(201).json({ 
         data: result.rows[0],
@@ -237,7 +223,7 @@ class TodoController {
           due_date, created_at, updated_at
       `;
 
-      const result = await pool.query(queryText, params);
+      const result = await query(queryText, params);
       
       if (result.rows.length === 0) {
         return res.status(404).json({ 
@@ -265,7 +251,7 @@ class TodoController {
       const { id } = req.params;
       
       const queryText = 'DELETE FROM todos WHERE id = $1 RETURNING id';
-      const result = await pool.query(queryText, [id]);
+      const result = await query(queryText, [id]);
       
       if (result.rows.length === 0) {
         return res.status(404).json({ 
@@ -302,7 +288,7 @@ class TodoController {
         FROM todos
       `;
 
-      const result = await pool.query(queryText);
+      const result = await query(queryText);
       const stats = result.rows[0];
       
       res.json({
@@ -353,7 +339,7 @@ class TodoController {
         LIMIT $2 OFFSET $3
       `;
 
-      const result = await pool.query(queryText, [`%${q}%`, limit, offset]);
+      const result = await query(queryText, [`%${q}%`, limit, offset]);
       
       res.json({
         data: result.rows,
@@ -387,7 +373,7 @@ class TodoController {
           due_date, created_at, updated_at
       `;
 
-      const result = await pool.query(queryText, [id]);
+      const result = await query(queryText, [id]);
       
       if (result.rows.length === 0) {
         return res.status(404).json({ 
@@ -423,7 +409,7 @@ class TodoController {
           due_date, created_at, updated_at
       `;
 
-      const result = await pool.query(queryText, [id]);
+      const result = await query(queryText, [id]);
       
       if (result.rows.length === 0) {
         return res.status(404).json({ 
