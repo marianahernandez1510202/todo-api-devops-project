@@ -1,6 +1,13 @@
 const { Pool } = require('pg');
 require('dotenv').config();
 
+// 🔍 DEBUG: Imprimir variables de entorno
+console.log('🔍 DEBUG - Environment variables:');
+console.log('DATABASE_URL:', process.env.DATABASE_URL);
+console.log('NODE_ENV:', process.env.NODE_ENV);
+console.log('PORT:', process.env.PORT);
+console.log('All env vars with DATABASE:', Object.keys(process.env).filter(key => key.includes('DATABASE')));
+
 // Database configuration with SSL disabled for Docker
 const config = {
   connectionString: process.env.DATABASE_URL,
@@ -10,16 +17,30 @@ const config = {
   connectionTimeoutMillis: 2000, // Return error after 2 seconds if connection could not be established
 };
 
+// 🔍 DEBUG: Imprimir configuración de la base de datos
+console.log('🔍 DEBUG - Database config:');
+console.log('Config object:', JSON.stringify(config, null, 2));
+
 // Create connection pool
 const pool = new Pool(config);
+
+// 🔍 DEBUG: Imprimir información del pool
+console.log('🔍 DEBUG - Pool configuration:');
+console.log('Pool host:', pool.options.host);
+console.log('Pool port:', pool.options.port);
+console.log('Pool database:', pool.options.database);
+console.log('Pool user:', pool.options.user);
 
 // Test database connection
 async function connectDatabase() {
   const maxRetries = 5;
   const retryDelay = 5000; // 5 segundos
   
+  console.log('🔍 DEBUG - Starting connection attempts...');
+  
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
+      console.log(`🔍 DEBUG - Attempt ${attempt}: Trying to connect...`);
       const client = await pool.connect();
       console.log('✅ Database connected successfully');
       
@@ -31,6 +52,13 @@ async function connectDatabase() {
       return true;
     } catch (error) {
       console.error(`❌ Database connection attempt ${attempt}/${maxRetries} failed:`, error.message);
+      console.log('🔍 DEBUG - Error details:', {
+        code: error.code,
+        errno: error.errno,
+        address: error.address,
+        port: error.port,
+        syscall: error.syscall
+      });
       
       if (attempt === maxRetries) {
         console.error('❌ All database connection attempts failed');
